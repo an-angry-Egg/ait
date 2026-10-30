@@ -1,0 +1,24 @@
+# 本地工具与项目数据（含记忆、备份，不对外）
+.workbuddy/
+
+# 依赖
+node_modules/
+package-lock.json
+
+# 构建产物
+dist/
+build/
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+
+# 日志与临时文件
+*.log
+npm-debug.log*
+.env
+.env.local

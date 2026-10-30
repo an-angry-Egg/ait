@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "AIT 点睛 · Demo",
+  "version": "0.1.0",
+  "description": "画个圈，说一句，把改动连同源码位置交给 Agent。",
+  "permissions": ["clipboardWrite"],
+  "host_permissions": ["<all_urls>"],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}
