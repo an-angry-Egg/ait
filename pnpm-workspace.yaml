@@ -1,0 +1,7 @@
+packages:
+  - 'packages/*'
+  - 'examples/*'
+
+# esbuild 需要执行安装脚本来落平台二进制
+allowBuilds:
+  esbuild: true

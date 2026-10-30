@@ -1,0 +1,16 @@
+{
+  "name": "ait",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "画个圈，说一句，改动落到源码上",
+  "scripts": {
+    "dev": "pnpm --filter example-vite-vue dev",
+    "ait": "pnpm --filter example-vite-vue exec node ../../packages/ait-bridge/bin/ait.js",
+    "build:example": "pnpm --filter example-vite-vue build",
+    "typecheck": "pnpm --filter example-vite-vue typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "AIT 点睛",
+  "version": "0.1.0",
+  "description": "画个圈，说一句，把改动连同源码位置交给 Agent。",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAhpZKpfdHE+cg0D0bjinqCIxyui2c1Lx3NJ70fZ6bke/nP9/tYqXiWyP5i5CThrYRg9bHa6xCPWtHWiwmb7chuDEdUJqR4d8ecOPoytxWhL/TlKEF7uxEA7Mr+nF1xsjwYaLvr8dbBuGAl5EW2PfF6pAFeFsuBkfNSwuUBu34HapRpQMeczFcKKmuUquT9wndWYJJ0sMgRvYrntfIfr0tpn63H5on7WNwOPayHwn6hgy97eKnAOsu2iU72/2gE0jr8HxpZC6pjFkqSiigHh1cHpNoB+InEMsHVAOLIZ5FAPDxNoRrPzlAD03PPL2cOPDjxonOrdeq5vnGRz9UypjVHQIDAQAB",
+  "permissions": ["clipboardWrite", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  }
+}

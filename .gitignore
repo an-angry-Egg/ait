@@ -9,6 +9,12 @@ package-lock.json
 dist/
 build/
 
+# 本地桥运行时数据（含配对 token、任务快照、日志）
+.ait/
+
+# 验证产物
+scripts/shot-*.png
+
 # 系统与编辑器
 .DS_Store
 Thumbs.db

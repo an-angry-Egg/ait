@@ -1,0 +1,20 @@
+{
+  "name": "@ait/vite-plugin",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "编译期给 Vue 模板元素注入 data-ait（文件:行:列），仅 dev 生效",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src"
+  ],
+  "peerDependencies": {
+    "vite": ">=5"
+  },
+  "dependencies": {
+    "@vue/compiler-dom": "^3.5.13",
+    "@vue/compiler-sfc": "^3.5.13"
+  }
+}

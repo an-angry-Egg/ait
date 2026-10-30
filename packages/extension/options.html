@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>AIT · 设置</title>
+    <style>
+      :root {
+        --bg: #0f1115;
+        --panel: #161a21;
+        --line: #262c36;
+        --text: #e6e9ef;
+        --muted: #8b95a5;
+        --brand: #3b82f6;
+        --ok: #10b981;
+        --err: #ef4444;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 40px 20px;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      }
+      .wrap { max-width: 560px; margin: 0 auto; }
+      h1 { font-size: 20px; margin: 0 0 6px; font-weight: 620; }
+      .sub { color: var(--muted); font-size: 13px; margin: 0 0 28px; }
+      .field { margin-bottom: 18px; }
+      label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+      input {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--text);
+        font: 13px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace;
+        outline: none;
+      }
+      input:focus { border-color: var(--brand); }
+      .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+      .row { display: flex; gap: 10px; align-items: center; margin-top: 24px; }
+      button {
+        padding: 9px 18px;
+        border-radius: 8px;
+        border: 1px solid var(--brand);
+        background: var(--brand);
+        color: #fff;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      button.ghost { background: transparent; color: var(--text); border-color: var(--line); }
+      button:disabled { opacity: 0.6; cursor: default; }
+      #status { font-size: 13px; margin-top: 16px; min-height: 20px; }
+      #status.ok { color: var(--ok); }
+      #status.err { color: var(--err); }
+      .tip {
+        margin-top: 32px;
+        padding: 14px 16px;
+        border-radius: 10px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        font-size: 12.5px;
+        color: var(--muted);
+        line-height: 1.8;
+      }
+      code {
+        font-family: ui-monospace, Consolas, monospace;
+        background: #0b0e13;
+        padding: 1px 6px;
+        border-radius: 4px;
+        color: #a8c7fa;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>AIT 点睛 · 设置</h1>
+      <p class="sub">连接本机运行的本地桥（<code>npx ait</code>）。每个项目一对 token，不共用。</p>
+
+      <div class="field">
+        <label for="endpoint">桥接地址</label>
+        <input id="endpoint" type="text" placeholder="ws://127.0.0.1:5198" />
+        <div class="hint">启动本地桥时终端会打印这一行。</div>
+      </div>
+
+      <div class="field">
+        <label for="token">配对口令</label>
+        <input id="token" type="text" placeholder="终端里 Token 后面那串" />
+        <div class="hint">存在浏览器本地，不上传。</div>
+      </div>
+
+      <div class="row">
+        <button id="save">保存</button>
+        <button id="test" class="ghost">测试连接</button>
+      </div>
+
+      <div id="status"></div>
+
+      <div class="tip">
+        确认扩展 ID：<br />
+        <code id="extid"></code><br />
+        本地桥首次启动会接受任意扩展来源；锁定 ID 后填进项目根目录的
+        <code>.ait/bridge.json</code> 的 <code>extensionId</code> 字段即可只允许这一个扩展连接。
+      </div>
+    </div>
+
+    <script src="options.js"></script>
+  </body>
+</html>
