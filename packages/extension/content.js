@@ -32,7 +32,11 @@
     snapshot: null,      // [{ el, cssText }]
     changed: 0,
     startedAt: 0,
-    statusText: ''
+    statusText: '',
+    // 画圈结束时浏览器仍会合成一次 click：mousedown 的 preventDefault 拦不住它。
+    // 起笔点在按钮内部时，这次 click 会直接触发按钮自己的 click 处理（比如「删除」）。
+    // 所以给一个短暂的抑制窗口，把紧随画圈的那一次 click 吞掉。
+    muteClickUntil: 0
   };
 
   /* ==================== 基础工具 ==================== */
@@ -357,6 +361,10 @@ details > summary { font-size: 11.5px; color: #7d8794; cursor: pointer; outline:
     e.stopPropagation();
     S.drawing = false;
 
+    // 之后 400ms 内出现的 click 是这次拖拽合成的残留，必须吞掉。
+    // 只吞一次就复位，避免误伤用户紧接着的正常点击。
+    S.muteClickUntil = Date.now() + 400;
+
     if (S.points.length < MIN_POINTS) {
       // 轨迹太短，按误触处理，不产生任何后果
       S.points = [];
@@ -387,6 +395,17 @@ details > summary { font-size: 11.5px; color: #7d8794; cursor: pointer; outline:
   document.addEventListener('mousemove', onMove, true);
   document.addEventListener('mouseup', onUp, true);
   document.addEventListener('dragstart', (e) => { if (canDraw() && !isHudPath(e)) e.preventDefault(); }, true);
+
+  // 挂 window 的捕获阶段，比页面自己在 document 上的监听更早，
+  // 这样即使页面把 click 监听在捕获阶段也拦得住。
+  window.addEventListener('click', function (e) {
+    if (Date.now() > S.muteClickUntil) return;
+    if (isHudPath(e)) return;
+    S.muteClickUntil = 0;
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+  }, true);
 
   /* ==================== 命中测试 ==================== */
 

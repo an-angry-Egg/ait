@@ -1,3 +1,5 @@
+import { recordLog } from './ait-logs'
+
 export type Profile = {
   name: string
   email: string
@@ -33,9 +35,30 @@ function traceId(): string {
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   headers.set('content-type', 'application/json')
-  headers.set('x-ait-trace-id', traceId())
 
-  const res = await fetch(path, { ...init, headers })
+  const trace = traceId()
+  headers.set('x-ait-trace-id', trace)
+
+  const method = (init.method ?? 'GET').toUpperCase()
+  const startedAt = performance.now()
+
+  let res: Response
+  try {
+    res = await fetch(path, { ...init, headers })
+  } catch (err) {
+    recordLog({
+      ts: new Date().toISOString(),
+      trace_id: trace,
+      level: 'ERROR',
+      method,
+      path,
+      status: 0,
+      message: '网络错误：' + (err as Error).message,
+      duration_ms: Math.round(performance.now() - startedAt)
+    })
+    throw err
+  }
+
   const text = await res.text()
   let data: any = null
   try {
@@ -43,6 +66,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   } catch {
     data = { message: text }
   }
+
+  recordLog({
+    ts: new Date().toISOString(),
+    trace_id: trace,
+    level: res.ok ? 'INFO' : res.status >= 500 ? 'ERROR' : 'WARN',
+    method,
+    path,
+    status: res.status,
+    message: res.ok ? 'OK' : data?.message ?? `请求失败（${res.status}）`,
+    duration_ms: Math.round(performance.now() - startedAt)
+  })
 
   if (!res.ok) {
     throw new ApiError(res.status, data?.message ?? `请求失败（${res.status}）`)

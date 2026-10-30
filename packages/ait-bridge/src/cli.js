@@ -116,8 +116,10 @@ export async function run(argv) {
     projectMeta,
     log: (line) => console.log('  ' + line),
     onTask: async (task, pushPhase) => {
-      const file = await persistTask(root, task)
+      // 先按 trace 捞日志再落盘：否则 Agent 打开任务文件时看不到任何日志，
+      // 「点了哪个按钮 → 后端报了什么错」这条链路就断了。
       const logs = collectLogs(root, task)
+      const file = await persistTask(root, { ...task, logs })
       pushPhase('received', `已收到，目标 ${task.target?.sourceLoc ?? task.target?.selector ?? '未定位'}`)
       console.log(`  ↳ 任务已保存 ${file}`)
       if (logs.length) {
