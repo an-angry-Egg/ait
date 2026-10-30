@@ -125,14 +125,12 @@ const boxOf = (t) => ev(`
   })()
 `)
 
-/** 纯移动绕圈：全程不按下任何键，末尾停顿等它自己锁定 */
-async function circle(label, { slow = 45, hold = 900, shotAt = 0, shotName = null } = {}) {
-  const box = await boxOf(label)
-  if (!box) throw new Error('找不到按钮：' + label)
+/** 纯移动绕一个矩形：全程不按下任何键，末尾停顿等它自己锁定 */
+async function circleBox(box, { slow = 45, hold = 900, pad = 16, shotAt = 0, shotName = null } = {}) {
   const cx = box.x + box.w / 2
   const cy = box.y + box.h / 2
-  const rx = box.w / 2 + 16
-  const ry = box.h / 2 + 14
+  const rx = box.w / 2 + pad
+  const ry = box.h / 2 + pad
 
   // buttons: 0 —— 鼠标只是移动，没有任何按键按下
   for (let i = 1; i <= 48; i++) {
@@ -146,6 +144,12 @@ async function circle(label, { slow = 45, hold = 900, shotAt = 0, shotName = nul
   // 绕满后停住：这一拍就是确认
   await sleep(hold)
   return box
+}
+
+async function circle(label, opts = {}) {
+  const box = await boxOf(label)
+  if (!box) throw new Error('找不到按钮：' + label)
+  return circleBox(box, opts)
 }
 
 const injected = await ev(`document.querySelectorAll('[data-ait]').length`)
@@ -270,10 +274,70 @@ console.log(`    退出登录按钮收到：mousedown ${sideEffects.down} / mous
 console.log('    浮窗：' + await panelText())
 await shot('07-危险按钮未被触发')
 
+/* ==================== 10. 批量选中 ==================== */
+
+step(10, '批量选中：圈住表格两行——圈住什么就选什么')
+
+// 回到聆听态：点 × 关掉浮窗，再点圆钮
+await ev(`
+  (() => {
+    const h = [...document.querySelectorAll('div')].find(d => d.shadowRoot && d.shadowRoot.querySelector('.close'));
+    const b = h && h.shadowRoot.querySelector('.close');
+    if (b) b.click();
+    return true;
+  })()
+`)
+await sleep(500)
+await ev(`
+  (() => {
+    const h = [...document.querySelectorAll('div')].find(d => d.shadowRoot && d.shadowRoot.querySelector('.orb'));
+    const o = h && h.shadowRoot.querySelector('.orb');
+    if (o && !o.hidden) o.click();
+    return true;
+  })()
+`)
+await sleep(900)
+
+// 把表格滚进视野，再量前两行的整体矩形
+await ev(`
+  (() => {
+    const t = document.querySelector('tbody tr');
+    if (t) t.scrollIntoView({ block: 'center' });
+    return true;
+  })()
+`)
+await sleep(700)
+
+const gbox = await ev(`
+  (() => {
+    const list = [...document.querySelectorAll('tbody tr')].slice(0, 2);
+    if (list.length < 2) return null;
+    const a = list[0].getBoundingClientRect();
+    const b = list[1].getBoundingClientRect();
+    const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+    return { x, y, w: Math.max(a.right, b.right) - x, h: Math.max(a.bottom, b.bottom) - y };
+  })()
+`)
+if (gbox) {
+  await circleBox(gbox, { slow: 40, hold: 950, pad: 12, shotAt: 36, shotName: '08-批量绕圈中' })
+  console.log('    浮窗：' + await panelText())
+
+  const boxCount = await ev(`
+    (() => {
+      const h = [...document.querySelectorAll('div')].find(d => d.shadowRoot && d.shadowRoot.querySelector('.layer'));
+      return h ? h.shadowRoot.querySelectorAll('.layer .box').length : -1;
+    })()
+  `)
+  console.log(`    高亮框：${boxCount} 个（圈住两行，两行各一框）`)
+  await shot('09-批量选中')
+} else {
+  console.log('    页面上找不到两行表格，跳过这一步')
+}
+
 console.log('\n════════ 演示结束 ════════')
 console.log('浏览器窗口保持打开，你可以直接接着操作。')
 console.log(`截图已存到 ${OUT_DIR}`)
-console.log('（浮窗仍处于聆听态：按住左键随便画圈即可试；点右上角 × 退出）\n')
+console.log('（浮窗仍处于聆听态：移动鼠标绕一圈即可试；点右上角 × 退出）\n')
 
 try { chrome.unref() } catch { /* 忽略 */ }
 process.exit(0)

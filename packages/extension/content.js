@@ -889,6 +889,12 @@ details > summary { font-size: 11.5px; color: #7d8794; cursor: pointer; outline:
 
     layer.innerHTML = '';
 
+    // 标签只画一次，且只在单选时画。
+    // 多选时框挨得很近（表格行就是首尾相接），标签放哪都会压住下一个元素，
+    // 而每个元素的 文件:行:列 浮窗清单里已经列全了，框上留编号就够。
+    let tagOwner = null;
+    const tagIndex = group.length === 1 && S.target ? group.indexOf(S.target) : -1;
+
     for (let i = 0; i < group.length; i++) {
       const el = group[i].el;
       if (!el || !el.isConnected) continue;
@@ -912,20 +918,31 @@ details > summary { font-size: 11.5px; color: #7d8794; cursor: pointer; outline:
         box.appendChild(idx);
       }
 
-      // 标签只画在主目标上，否则几个标签会互相压住
-      if (isMain) {
-        const tag = document.createElement('div');
-        tag.className = 'box-tag';
-        const loc = shortLoc(sourceOf(el));
-        tag.textContent = labelOf(el).slice(0, 16) + (loc ? ' · ' + loc : '');
-        // 优先放框下方，避免遮住元素上方的页面内容；下方不够再放上方，都不够才放进框内
-        const below = window.innerHeight - (r.top + r.height);
-        tag.style.top = below > 26 ? (r.height + 6) + 'px' : (r.top > 26 ? '-18px' : '2px');
-        box.appendChild(tag);
-      }
+      if (i === tagIndex) tagOwner = { el: el, r: r };
 
       layer.appendChild(box);
     }
+
+    if (!tagOwner) return;
+
+    const el = tagOwner.el;
+    const r = tagOwner.r;
+    const tag = document.createElement('div');
+    tag.className = 'box-tag';
+    const loc = shortLoc(sourceOf(el));
+    tag.textContent = labelOf(el).slice(0, 16) + (loc ? ' · ' + loc : '');
+
+    // 用视口坐标直接定位。挂在框里再用 top 偏移会跟着框走，
+    // 多选时容易落进框内压住单元格文字。
+    tag.style.position = 'fixed';
+    tag.style.left = Math.max(4, r.left - 2) + 'px';
+    const below = window.innerHeight - (r.top + r.height);
+    if (below > 24) tag.style.top = (r.top + r.height + 4) + 'px';
+    else if (r.top > 24) tag.style.top = (r.top - 20) + 'px';
+    else tag.style.top = (r.top + 2) + 'px';
+
+    // 标签后放，保证盖在框线之上
+    layer.appendChild(tag);
   }
 
   function scheduleBoxes() {
