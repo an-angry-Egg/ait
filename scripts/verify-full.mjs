@@ -154,25 +154,24 @@ const boxOf = (text) => evaluate(`
   })()
 `)
 
-/** 在按钮外圈画一个椭圆；fromInside 为 true 时起笔落在按钮内部（最容易误触的情形） */
-async function circle(label, fromInside = false) {
+/** 纯移动绕一圈，末尾停住等它自己锁定。全程不按任何键——指向本身不产生副作用。 */
+async function circle(label) {
   const box = await boxOf(label)
   if (!box) throw new Error('找不到按钮：' + label)
   const cx = box.x + box.w / 2
   const cy = box.y + box.h / 2
 
-  if (fromInside) {
-    await mouse('mousePressed', box.x + 12, cy)
-  } else {
-    await mouse('mousePressed', box.x - 14, box.y - 12)
+  for (let i = 1; i <= 32; i++) {
+    const t = (i / 32) * Math.PI * 2
+    await cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: cx + Math.cos(t) * (box.w / 2 + 12),
+      y: cy + Math.sin(t) * (box.h / 2 + 10),
+      buttons: 0
+    }, sessionId)
+    await sleep(18)
   }
-  for (let i = 1; i <= 20; i++) {
-    const t = (i / 20) * Math.PI * 2
-    await mouse('mouseMoved', cx + Math.cos(t) * (box.w / 2 + 12), cy + Math.sin(t) * (box.h / 2 + 10))
-    await sleep(8)
-  }
-  await mouse('mouseReleased', cx, cy)
-  await sleep(850)
+  await sleep(900)   // 停顿即确认，锁定在停顿之后发生
   return box
 }
 
@@ -304,17 +303,11 @@ const clickStats = () => evaluate(`({ btn: window.__btnClick, doc: window.__docC
 const textBefore = await evaluate(`document.body.innerText.length`)
 
 await armDangerButton()
-await circle('退出登录', false)
-let stats = await clickStats()
-check('起笔在按钮外：按钮自身未收到 click', stats.btn === 0, `${stats.btn} 次`)
-check('起笔在按钮外：捕获阶段也没漏出 click', stats.doc === 0, `${stats.doc} 次`)
-
-await armDangerButton()
-await circle('退出登录', true)
-stats = await clickStats()
-check('起笔在按钮内：按钮自身未收到 click', stats.btn === 0, `${stats.btn} 次`)
-check('起笔在按钮内：捕获阶段也没漏出 click', stats.doc === 0, `${stats.doc} 次`)
-check('画圈后页面未跳转', stats.sameUrl)
+await circle('退出登录')
+const stats = await clickStats()
+check('圈住危险按钮：按钮自身未收到 click', stats.btn === 0, `${stats.btn} 次`)
+check('圈住危险按钮：捕获阶段也没漏出 click', stats.doc === 0, `${stats.doc} 次`)
+check('圈选后页面未跳转', stats.sameUrl)
 
 const textAfter = await evaluate(`document.body.innerText.length`)
 check('画圈后页面内容未变化', textBefore === textAfter, `${textBefore} → ${textAfter}`)

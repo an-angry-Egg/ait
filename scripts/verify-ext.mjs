@@ -148,13 +148,17 @@ const btn = await evaluate(`
   })()
 `)
 
-await mouse('mousePressed', btn.x - 10, btn.y - 10)
-for (let i = 1; i <= 16; i++) {
-  const t = (i / 16) * Math.PI * 2
-  await mouse('mouseMoved', btn.x + btn.w / 2 + Math.cos(t) * (btn.w / 2 + 8), btn.y + btn.h / 2 + Math.sin(t) * (btn.h / 2 + 8))
-  await sleep(10)
+// 纯移动绕一圈再停住：指向靠轨迹判断，全程不按键
+for (let i = 1; i <= 32; i++) {
+  const t = (i / 32) * Math.PI * 2
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: btn.x + btn.w / 2 + Math.cos(t) * (btn.w / 2 + 8),
+    y: btn.y + btn.h / 2 + Math.sin(t) * (btn.h / 2 + 8),
+    buttons: 0
+  }, sessionId)
+  await sleep(18)
 }
-await mouse('mouseReleased', btn.x + btn.w / 2, btn.y + btn.h / 2)
 await sleep(900)
 
 const speak = async (text) => {

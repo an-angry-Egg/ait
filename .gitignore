@@ -14,6 +14,7 @@ build/
 
 # 验证产物
 scripts/shot-*.png
+scripts/demo-shots/
 
 # 系统与编辑器
 .DS_Store

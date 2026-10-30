@@ -15,28 +15,70 @@
 
   /* ==================== 常量 ==================== */
 
-  const MAX_CANDS = 5;
+  const MAX_CANDS = 16;     // 候选池要大于 MAX_SELECT，否则圈住一屏元素时选不满
+  const MAX_SELECT = 6;     // 一圈最多自动选中 6 个
   const MAX_LOGS = 8;
-  const MIN_POINTS = 8;
   const ACCENT = '#3b82f6';
+
+  /**
+   * 拖尾：只画最近一小段轨迹，越旧越淡越细。
+   * 手势判定仍用完整的 1.5 秒轨迹，两者窗口不同是有意的——
+   * 判定需要整圈，视觉只需要尾巴。
+   */
+  const TRAIL = {
+    lifeMs: 760,      // 一个点的可见寿命
+    fadeOutMs: 620,   // 锁定后定格轨迹的淡出时长
+    maxPoints: 240
+  };
+
+  // 元素面积超过圈面积的这个倍数，说明它比圈还大，不是"被圈住的东西"
+  const OUTGROW = 1.5;
+
+  // 元素至少这么多面积落在圈里，才算"被圈住"。
+  // 用覆盖率而不是票数：8×8 网格在包围盒边缘会外溢一列，紧邻的元素也能拿到票。
+  const COVER_MIN = 0.5;
+
+  // 判断"整块在圈里"时给的容差，允许圈画得不那么贴合
+  const LIFT_PAD = 10;
+
+  /**
+   * 圈选手势参数：鼠标只移动、不按键，靠轨迹判断"绕了一圈"。
+   * 四个条件同时成立才算有意绕圈，避免移动鼠标时误触。
+   */
+  const LOOP = {
+    // 时间窗不能卡太紧：绕得慢一点就会把起点裁掉，一笔只剩后半段弧，
+    // 实测 40 点慢速整圈只留 34 点、角度从 350° 掉到 303°，判定直接失败。
+    // 跨笔隔离由 resetAfterMs（停笔即清空）负责，时间窗只做兜底。
+    windowMs: 6000,
+    maxPoints: 420,     // 6 秒 × 70Hz，保证窗口内不会被点数截断
+    minPoints: 24,
+    minAngle: 330,      // 累计绕行角度下限（度）
+    minSize: 48,        // 包围盒宽高下限（px），排除手抖
+    closeRatio: 0.35,   // 首尾距离 / 对角线，排除画大弧线
+    holdMs: 400,        // 绕满后停顿多久认定完成
+    resetAfterMs: 700,  // 停顿超过这个时长就收笔，清空轨迹重来
+    cooldownMs: 2000,   // 触发后的冷却
+    tickMs: 90
+  };
 
   /* ==================== 状态 ==================== */
 
   const S = {
     mode: 'idle',        // idle | listening | drafting | doing | done
     points: [],
-    drawing: false,
-    candidates: [],      // [{ el, votes, area, score }]
-    target: null,
+    candidates: [],      // 选中组 [{ el, votes, area, score }]，按分数排序
+    selected: [],        // 同上，保持面积降序，用来画框
+    target: null,        // 组里的主目标（分数最高）
     draft: [],           // [{ id, text }]
     snapshot: null,      // [{ el, cssText }]
     changed: 0,
     startedAt: 0,
     statusText: '',
-    // 画圈结束时浏览器仍会合成一次 click：mousedown 的 preventDefault 拦不住它。
-    // 起笔点在按钮内部时，这次 click 会直接触发按钮自己的 click 处理（比如「删除」）。
-    // 所以给一个短暂的抑制窗口，把紧随画圈的那一次 click 吞掉。
-    muteClickUntil: 0
+    lastMoveAt: 0,      // 最近一次移动时间，用来判断"绕完停住了"
+    cooldownUntil: 0,   // 圈选触发后的冷却截止时间
+    lockedBox: null,    // 刚锁定的圈，用来画一下高亮框
+    frozen: null,       // 锁定瞬间的轨迹快照，淡出用
+    frozenAt: 0
   };
 
   /* ==================== 基础工具 ==================== */
@@ -121,6 +163,14 @@
   background: rgba(59,130,246,.06); pointer-events: none;
 }
 .box.locked { border-style: solid; box-shadow: 0 0 0 3px rgba(59,130,246,.18); }
+/* 批量选中：主目标实心加粗，其余只描边并标序号 */
+.box.main { border-width: 2px; box-shadow: 0 0 0 4px rgba(59,130,246,.22); }
+.box.sub { border-color: rgba(59,130,246,.62); background: rgba(59,130,246,.04); }
+.box-idx {
+  position: absolute; right: -9px; top: -9px; width: 18px; height: 18px; border-radius: 50%;
+  background: rgba(19,22,29,.92); border: 1px solid rgba(59,130,246,.8); color: #cfe0ff;
+  font: 600 10px/16px ui-monospace, monospace; text-align: center; font-family: ui-monospace, monospace;
+}
 .box-tag {
   position: absolute; left: 0; top: -18px; font-size: 10px; line-height: 16px;
   padding: 0 6px; border-radius: 4px; background: ${ACCENT}; color: #fff;
@@ -192,6 +242,20 @@
 .name { font-size: 12px; color: #e2e8f0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .loc { font-size: 11px; color: #6ee7b7; margin-left: auto; font-variant-numeric: tabular-nums; }
 .loc.none { color: #6b7480; }
+
+/* 批量选中清单 */
+.picks { list-style: none; display: flex; flex-direction: column; gap: 2px; max-height: 140px; overflow-y: auto; margin-bottom: 8px; }
+.picks li { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: #9aa3af; padding: 3px 4px; border-radius: 6px; }
+.picks li.main { color: #e8eaed; background: rgba(59,130,246,.12); }
+.picks .n {
+  flex: none; width: 15px; height: 15px; border-radius: 50%; text-align: center;
+  border: 1px solid rgba(59,130,246,.5); color: #9ec1f5;
+  font: 600 9px/13px ui-monospace, monospace; font-family: ui-monospace, monospace;
+}
+.picks .tag { flex: none; font-size: 9px; padding: 0 4px; background: rgba(255,255,255,.07); color: #8b95a3; }
+.picks .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picks .loc { flex: none; font-size: 10px; margin-left: 0; }
+.picks-note { font-size: 10.5px; color: #6b7480; margin: -2px 0 9px; }
 
 /* 草稿 */
 .draft { list-style: none; display: flex; flex-direction: column; gap: 4px; max-height: 132px; overflow-y: auto; }
@@ -305,23 +369,100 @@ details > summary { font-size: 11.5px; color: #7d8794; cursor: pointer; outline:
     canvas.style.display = on ? 'block' : 'none';
   }
 
-  function drawTrace() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const pts = S.points;
-    if (pts.length < 2) return;
-
+  function strokePath(pts, k, width, rgb) {
+    if (!pts || pts.length < 2) return;
     ctx.beginPath();
     ctx.moveTo(pts[0].x, pts[0].y);
     for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-    ctx.strokeStyle = ACCENT;
-    ctx.lineWidth = 2.5;
-    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(' + rgb + ',' + (0.10 + 0.72 * k).toFixed(3) + ')';
+    ctx.lineWidth = width * (0.45 + 0.55 * k);
+    ctx.stroke();
+  }
+
+  function drawTrace() {
+    if (!canvas.isConnected) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    const now = Date.now();
+
+    // 锁定瞬间轨迹不立刻消失，先定格再淡出，衔接才不会突兀
+    if (S.frozen) {
+      const k = 1 - (now - S.frozenAt) / TRAIL.fadeOutMs;
+      if (k > 0) strokePath(S.frozen, k * 0.8, 2.6, '59,130,246');
+    }
+
+    // 刚锁定的圈画成虚线框，让人看清"它认了这一圈"
+    if (S.lockedBox) {
+      const b = S.lockedBox;
+      ctx.save();
+      ctx.setLineDash([6, 5]);
+      ctx.strokeStyle = 'rgba(59,130,246,.95)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(b.x1 - 2, b.y1 - 2, b.w + 4, b.h + 4);
+      ctx.restore();
+    }
+
+    // 实时拖尾：逐段按时间衰减，越旧越淡越细
+    const pts = S.points;
+    if (pts.length < 2) return;
+
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1];
+      const b = pts[i];
+      const age = now - (b.t || now);
+      const k = 1 - age / TRAIL.lifeMs;
+      if (k <= 0) continue;
+
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      // 平方衰减：尾部化得快，头部保持实
+      ctx.strokeStyle = 'rgba(59,130,246,' + (0.08 + 0.80 * k * k).toFixed(3) + ')';
+      ctx.lineWidth = 0.8 + 3.2 * k;
+      ctx.stroke();
+    }
+
+    // 头部光点：让人看得见"笔尖"在哪
+    const head = pts[pts.length - 1];
+    ctx.beginPath();
+    ctx.arc(head.x, head.y, 9, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(59,130,246,.28)';
+    ctx.lineWidth = 1.5;
     ctx.stroke();
 
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(59,130,246,.10)';
+    ctx.beginPath();
+    ctx.arc(head.x, head.y, 4.2, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(59,130,246,.95)';
     ctx.fill();
+  }
+
+  // 拖尾要持续衰减，鼠标停住时也得继续画，所以用 rAF 自驱动
+  let raf = 0;
+
+  function trailTick() {
+    raf = 0;
+    if (!canvas.isConnected) return;
+    drawTrace();
+
+    const now = Date.now();
+    if (S.frozen && now - S.frozenAt > TRAIL.fadeOutMs) S.frozen = null;
+
+    let live = false;
+    for (let i = 0; i < S.points.length; i++) {
+      if (now - (S.points[i].t || 0) < TRAIL.lifeMs) { live = true; break; }
+    }
+
+    if (live || S.frozen) {
+      raf = requestAnimationFrame(trailTick);
+    } else {
+      clearCanvas();
+    }
+  }
+
+  function kickTrail() {
+    if (!raf) raf = requestAnimationFrame(trailTick);
   }
 
   function clearCanvas() {
@@ -330,82 +471,313 @@ details > summary { font-size: 11.5px; color: #7d8794; cursor: pointer; outline:
 
   function isHudPath(e) {
     const path = e.composedPath ? e.composedPath() : [];
-    return path.indexOf(host) !== -1 || path.indexOf(canvas) !== -1;
+    if (!path.length) return false;
+    if (path[0] === canvas) return true;
+    return path.indexOf(host) !== -1;
   }
 
   function canDraw() {
     return S.mode === 'listening' || S.mode === 'drafting';
   }
 
-  function onDown(e) {
-    if (e.button !== 0 || !canDraw() || isHudPath(e)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    S.drawing = true;
-    S.points = [{ x: e.clientX, y: e.clientY }];
-    showCanvas(true);
-    clearBoxes();
-  }
-
+  /**
+   * 鼠标只移动、不按下。全程采集轨迹，按形状判断是否绕了一圈。
+   *
+   * 采集不因浮窗而中断：浮窗固定在右上角，经常正好压在目标上，
+   * 圈到它上面时轨迹必须照常记，否则弧线断一段、角度就不够成圈
+   * （实测圈「编辑资料」时 40 点被吃掉 6 点，角度从 350° 掉到 303°）。
+   * 聆听/草稿态下的鼠标移动本来就只有一个意图：构图。
+   */
   function onMove(e) {
-    if (!S.drawing) return;
-    e.preventDefault();
-    e.stopPropagation();
-    S.points.push({ x: e.clientX, y: e.clientY });
-    drawTrace();
+    if (!canDraw()) return;
+    const now = Date.now();
+    S.points.push({ x: e.clientX, y: e.clientY, t: now });
+    S.lastMoveAt = now;
+    while (S.points.length > 2 && now - S.points[0].t > LOOP.windowMs) S.points.shift();
+    if (S.points.length > LOOP.maxPoints) S.points.splice(0, S.points.length - LOOP.maxPoints);
+    kickTrail();
   }
 
-  function onUp(e) {
-    if (!S.drawing) return;
-    e.preventDefault();
-    e.stopPropagation();
-    S.drawing = false;
+  document.addEventListener('mousemove', onMove, true);
+  window.addEventListener('resize', function () { if (canvas.isConnected) sizeCanvas(); });
 
-    // 之后 400ms 内出现的 click 是这次拖拽合成的残留，必须吞掉。
-    // 只吞一次就复位，避免误伤用户紧接着的正常点击。
-    S.muteClickUntil = Date.now() + 400;
+  function bboxOf(points) {
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      if (p.x < x1) x1 = p.x;
+      if (p.x > x2) x2 = p.x;
+      if (p.y < y1) y1 = p.y;
+      if (p.y > y2) y2 = p.y;
+    }
+    return { x1: x1, y1: y1, x2: x2, y2: y2, w: x2 - x1, h: y2 - y1 };
+  }
 
-    if (S.points.length < MIN_POINTS) {
-      // 轨迹太短，按误触处理，不产生任何后果
-      S.points = [];
-      clearCanvas();
-      showCanvas(false);
-      return;
+  /**
+   * 这段轨迹是不是"有意绕了一圈"。
+   * 只看形状，与按键无关：累计绕行角度够、尺寸够、首尾够近，三者缺一不可。
+   * 判定过程记在 S.loopInfo 里，便于排障时看清卡在哪一条。
+   */
+  function detectLoop(points) {
+    const info = { n: points.length, turn: 0, w: 0, h: 0, gapR: 0 };
+    S.loopInfo = info;
+
+    if (points.length < LOOP.minPoints) return null;
+
+    const box = bboxOf(points);
+    info.w = Math.round(box.w);
+    info.h = Math.round(box.h);
+    if (box.w < LOOP.minSize || box.h < LOOP.minSize) return null;
+
+    // 绕包围盒中心累计极角。
+    // 不用"相邻弦的方向角差"：轨迹扁长时，长轴端点附近的切向角变化最快，
+    // 采样稀疏就会单步跳过 180°，被归一化吃掉角度，实测整圈只算到 264°。
+    // 这里先把坐标按半轴归一化成圆再取角，椭圆上的角度才是均匀的；
+    // 带符号累加还能让往返移动自己抵消。
+    const ccx = (box.x1 + box.x2) / 2;
+    const ccy = (box.y1 + box.y2) / 2;
+    const rx = Math.max(1, box.w / 2);
+    const ry = Math.max(1, box.h / 2);
+    let turn = 0;
+    let prev = null;
+    for (let i = 0; i < points.length; i++) {
+      const nx = (points[i].x - ccx) / rx;
+      const ny = (points[i].y - ccy) / ry;
+      if (Math.hypot(nx, ny) < 0.15) { prev = null; continue; } // 太靠中心，角度无意义
+      const ang = Math.atan2(ny, nx);
+      if (prev !== null) {
+        let d = ang - prev;
+        while (d > Math.PI) d -= Math.PI * 2;
+        while (d < -Math.PI) d += Math.PI * 2;
+        turn += d;
+      }
+      prev = ang;
+    }
+    info.turn = Math.round(Math.abs(turn) * 180 / Math.PI);
+    if (info.turn < LOOP.minAngle) return null;
+
+    const first = points[0];
+    const last = points[points.length - 1];
+    const gap = Math.hypot(last.x - first.x, last.y - first.y);
+    const diag = Math.hypot(box.w, box.h);
+    if (!diag) return null;
+    info.gapR = Math.round((gap / diag) * 100) / 100;
+    if (info.gapR > LOOP.closeRatio) return null;
+
+    return box;
+  }
+
+  let watcher = null;
+
+  /**
+   * 把内部状态写到 <html data-ait-state>。
+   * 隔离世界和页面主世界不共享 window，这是唯一能被外部读到的通道；
+   * 自动化验收和用户报 bug 时都靠它看清"采集到几个点、成没成圈"。
+   */
+  function syncState(extra) {
+    try {
+      const li = S.loopInfo;
+      const detail = li
+        ? ' n=' + li.n + ' turn=' + li.turn + ' box=' + li.w + 'x' + li.h + ' gap=' + li.gapR
+        : '';
+      document.documentElement.setAttribute('data-ait-state',
+        S.mode + ' pts=' + S.points.length + ' sel=' + S.selected.length + detail +
+        (extra ? ' ' + extra : ''));
+    } catch (e) { /* 忽略 */ }
+  }
+
+  function startWatcher() {
+    if (watcher) return;
+    watcher = setInterval(function () {
+      if (!canDraw()) return;
+      if (Date.now() < S.cooldownUntil) return;
+
+      const box = detectLoop(S.points);
+      const held = Date.now() - S.lastMoveAt;
+
+      if (!box) {
+        // 停太久说明这一笔已经结束，留着只会和下一次混在一起
+        if (held > LOOP.resetAfterMs && S.points.length) S.points = [];
+        syncState('loop=n hold=' + held);
+        return;
+      }
+
+      syncState('loop=y hold=' + held);
+
+      // 绕满还不算完，要停住一拍。这一拍就是"就是这个"的确认。
+      if (held < LOOP.holdMs) return;
+      lockLoop();
+    }, LOOP.tickMs);
+  }
+
+  function stopWatcher() {
+    if (watcher) { clearInterval(watcher); watcher = null; }
+  }
+
+  /**
+   * 命中的是最深的节点（常常是 span、td），把它提回"整块都在圈里"的祖先。
+   * 不做这一步，圈住两行表格会选中一堆 td，而不是两行。
+   */
+  function liftToUnit(el, box) {
+    let best = el;
+    let node = el.parentElement;
+    let hop = 0;
+
+    while (node && node !== document.body && hop < 8) {
+      if (!selectable(node)) break;
+      const r = node.getBoundingClientRect();
+      const inside = r.left >= box.x1 - LIFT_PAD && r.top >= box.y1 - LIFT_PAD &&
+                     r.right <= box.x2 + LIFT_PAD && r.bottom <= box.y2 + LIFT_PAD;
+      if (!inside) break;
+      best = node;
+      node = node.parentElement;
+      hop++;
     }
 
+    return best;
+  }
+
+  /**
+   * 圈住的东西全部自动选中：圈里有几个独立组件就选几个。
+   * 三条规则决定"独立"：
+   *   1. 先提回被整块圈住的祖先（td → tr → 卡片）
+   *   2. 比圈还大一圈的元素不是被圈住的东西，丢掉
+   *   3. 互为父子只算一个
+   */
+  function pickGroup(points, box) {
+    const pool = hitTest(points);
+
+    // 提升到语义单元，同单元票数合并
+    const merged = [];
+    for (let i = 0; i < pool.length; i++) {
+      const top = liftToUnit(pool[i].el, box);
+      let seen = null;
+      for (let j = 0; j < merged.length; j++) {
+        if (merged[j].el === top) { seen = merged[j]; break; }
+      }
+      if (seen) { seen.votes += pool[i].votes; continue; }
+
+      const r = top.getBoundingClientRect();
+      merged.push({
+        el: top, votes: pool[i].votes, area: r.width * r.height, score: 0,
+        cover: coverOf(r, box)
+      });
+    }
+
+    const loopArea = Math.max(1, box.w * box.h);
+
+    // 两道过滤：
+    //   1. 覆盖率 —— 元素至少一半落在圈里，才算"被圈住"。只擦到边的邻居
+    //      （实测 118px 的圈压在「编辑资料」上，邻居「修改密码」被外溢的网格列
+    //      扫到 8 票，按票数根本拦不住）覆盖率只有 1%。
+    //   2. 面积 —— 比圈还大一圈的元素不是被圈住的东西。
+    const fit = [];
+    for (let i = 0; i < merged.length; i++) {
+      if (merged[i].cover < COVER_MIN) continue;
+      if (merged[i].area > loopArea * OUTGROW) continue;
+      fit.push(merged[i]);
+    }
+
+    // 容器不许顶替更完整的具体元素。
+    // 圈「编辑资料」时，落在两个按钮间隙的采样点会命中外层 .profile-actions，
+    // 它面积大，在下面的父子去重里先占位，把真正的按钮挤掉——结果改动的颜色
+    // 刷在容器上，按钮自身背景一盖，看起来像没生效。
+    // 判据：内层元素的覆盖率明显更高（+0.2），说明外层只是"顺带被圈到一角"。
+    const pruned = [];
+    for (let i = 0; i < fit.length; i++) {
+      const c = fit[i];
+      let shadowed = false;
+      for (let j = 0; j < fit.length; j++) {
+        const o = fit[j];
+        if (o === c) continue;
+        if (c.el.contains(o.el) && o.cover > c.cover + 0.2) { shadowed = true; break; }
+      }
+      if (!shadowed) pruned.push(c);
+    }
+
+    // 从大到小收：先让容器占位，被容器包住的就不再单列
+    pruned.sort(function (a, b) { return b.area - a.area; });
+
+    const kept = [];
+    for (let i = 0; i < pruned.length; i++) {
+      let nested = false;
+      for (let j = 0; j < kept.length; j++) {
+        if (kept[j].el.contains(pruned[i].el) || pruned[i].el.contains(kept[j].el)) { nested = true; break; }
+      }
+      if (nested) continue;
+      kept.push(pruned[i]);
+      if (kept.length >= MAX_SELECT) break;
+    }
+
+    // 没有元素达到覆盖率要求：退回盖得最多的那个，总比空手好
+    if (!kept.length) {
+      const best = merged.slice().sort(function (a, b) { return (b.cover - a.cover) || (b.votes - a.votes); })[0];
+      return best ? [best] : pool.slice(0, 1);
+    }
+
+    // 序号按视觉顺序（从上到下、从左到右），和页面上看到的对得上
+    kept.sort(function (a, b) {
+      const ra = a.el.getBoundingClientRect();
+      const rb = b.el.getBoundingClientRect();
+      return (ra.top - rb.top) || (ra.left - rb.left);
+    });
+
+    return kept;
+  }
+
+  /** 圈的包围盒有多大比例压在浮窗上 */
+  function overlapRatio(box, r) {
+    const w = Math.min(box.x2, r.right) - Math.max(box.x1, r.left);
+    const h = Math.min(box.y2, r.bottom) - Math.max(box.y1, r.top);
+    if (w <= 0 || h <= 0) return 0;
+    return (w * h) / Math.max(1, box.w * box.h);
+  }
+
+  /** 元素有多大比例落在圈里（分母是元素自己的面积） */
+  function coverOf(r, box) {
+    if (!r.width || !r.height) return 0;
+    const w = Math.min(r.right, box.x2) - Math.max(r.left, box.x1);
+    const h = Math.min(r.bottom, box.y2) - Math.max(r.top, box.y1);
+    if (w <= 0 || h <= 0) return 0;
+    return (w * h) / (r.width * r.height);
+  }
+
+  function lockLoop() {
+    const box = bboxOf(S.points);
     const pts = S.points.slice();
-    clearCanvas();
-    showCanvas(false);
 
-    const cands = hitTest(pts);
-    if (!cands.length) {
-      S.draft.length ? render() : null;
-      flash('圈里没有可选元素，换个圈试试');
+    // 整圈基本压在浮窗上：那是在跟浮窗本身打交道，不该去选它下面的元素。
+    // 阈值放到 0.8，给"目标正好在浮窗边缘"留足余量（实测圈被浮窗压住的按钮只重叠约 53%）。
+    if (overlapRatio(box, host.getBoundingClientRect()) > 0.8) {
+      S.points = [];
+      S.cooldownUntil = Date.now() + 600;
+      clearCanvas();
+      flash('这一圈在浮窗上，往旁边一点');
       return;
     }
-    S.candidates = cands;
+    S.points = [];
+    S.lockedBox = box;
+    S.frozen = pts;
+    S.frozenAt = Date.now();
+    S.cooldownUntil = Date.now() + LOOP.cooldownMs;
+
+    const group = pickGroup(pts, box);
+    if (!group.length) {
+      flash('圈里没有可选元素，再绕一圈试试');
+      kickTrail();
+      return;
+    }
+
+    S.candidates = group;
+    S.selected = group.slice();
     rank(S.currentText());
     S.target = S.candidates[0];
     if (S.mode === 'listening') S.mode = 'drafting';
     render();
+    kickTrail();
     focusSay();
+    setTimeout(function () { S.lockedBox = null; kickTrail(); }, 900);
   }
-
-  document.addEventListener('mousedown', onDown, true);
-  document.addEventListener('mousemove', onMove, true);
-  document.addEventListener('mouseup', onUp, true);
-  document.addEventListener('dragstart', (e) => { if (canDraw() && !isHudPath(e)) e.preventDefault(); }, true);
-
-  // 挂 window 的捕获阶段，比页面自己在 document 上的监听更早，
-  // 这样即使页面把 click 监听在捕获阶段也拦得住。
-  window.addEventListener('click', function (e) {
-    if (Date.now() > S.muteClickUntil) return;
-    if (isHudPath(e)) return;
-    S.muteClickUntil = 0;
-    e.preventDefault();
-    e.stopPropagation();
-    e.stopImmediatePropagation();
-  }, true);
 
   /* ==================== 命中测试 ==================== */
 
@@ -510,28 +882,50 @@ details > summary { font-size: 11.5px; color: #7d8794; cursor: pointer; outline:
   }
 
   function updateBoxes() {
-    if (!S.target || S.mode === 'idle' || S.mode === 'listening') { clearBoxes(); return; }
+    if (S.mode === 'idle' || S.mode === 'listening') { clearBoxes(); return; }
+
+    const group = S.selected.length ? S.selected : (S.target ? [S.target] : []);
+    if (!group.length) { clearBoxes(); return; }
+
     layer.innerHTML = '';
-    if (!S.target.el || !S.target.el.isConnected) return;
 
-    const r = S.target.el.getBoundingClientRect();
-    const box = document.createElement('div');
-    box.className = 'box locked';
-    box.style.left = (r.left - 2) + 'px';
-    box.style.top = (r.top - 2) + 'px';
-    box.style.width = (r.width + 4) + 'px';
-    box.style.height = (r.height + 4) + 'px';
+    for (let i = 0; i < group.length; i++) {
+      const el = group[i].el;
+      if (!el || !el.isConnected) continue;
 
-    const tag = document.createElement('div');
-    tag.className = 'box-tag';
-    const loc = shortLoc(sourceOf(S.target.el));
-    tag.textContent = labelOf(S.target.el).slice(0, 16) + (loc ? ' · ' + loc : '');
-    // 优先放框下方，避免遮住元素上方的页面内容；下方不够再放上方，都不够才放进框内
-    const below = window.innerHeight - (r.top + r.height);
-    tag.style.top = below > 26 ? (r.height + 6) + 'px' : (r.top > 26 ? '-18px' : '2px');
-    box.appendChild(tag);
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
 
-    layer.appendChild(box);
+      const isMain = !!S.target && S.target.el === el;
+      const box = document.createElement('div');
+      box.className = 'box locked ' + (isMain ? 'main' : 'sub');
+      box.style.left = (r.left - 2) + 'px';
+      box.style.top = (r.top - 2) + 'px';
+      box.style.width = (r.width + 4) + 'px';
+      box.style.height = (r.height + 4) + 'px';
+
+      // 多选时给每个框标序号，和浮窗里的清单对得上
+      if (group.length > 1) {
+        const idx = document.createElement('span');
+        idx.className = 'box-idx';
+        idx.textContent = String(i + 1);
+        box.appendChild(idx);
+      }
+
+      // 标签只画在主目标上，否则几个标签会互相压住
+      if (isMain) {
+        const tag = document.createElement('div');
+        tag.className = 'box-tag';
+        const loc = shortLoc(sourceOf(el));
+        tag.textContent = labelOf(el).slice(0, 16) + (loc ? ' · ' + loc : '');
+        // 优先放框下方，避免遮住元素上方的页面内容；下方不够再放上方，都不够才放进框内
+        const below = window.innerHeight - (r.top + r.height);
+        tag.style.top = below > 26 ? (r.height + 6) + 'px' : (r.top > 26 ? '-18px' : '2px');
+        box.appendChild(tag);
+      }
+
+      layer.appendChild(box);
+    }
   }
 
   function scheduleBoxes() {
@@ -746,6 +1140,10 @@ details > summary { font-size: 11.5px; color: #7d8794; cursor: pointer; outline:
     const cand = S.target;
     const el = cand.el;
     const r = el.getBoundingClientRect();
+    const src = S.selected.length ? S.selected : [cand];
+    // 主目标排第一，其余保持圈选时的顺序
+    const group = src.filter(function (c) { return c.el === el; })
+      .concat(src.filter(function (c) { return c.el !== el; }));
     const logs = readLogs();
     const traces = [];
     const seen = {};
@@ -778,6 +1176,20 @@ details > summary { font-size: 11.5px; color: #7d8794; cursor: pointer; outline:
         confidence: confidenceOf(cand),
         candidateCount: S.candidates.length
       },
+      // 圈里选中的全部元素，第一个是主目标（与 target 相同）
+      targets: group.map(function (c) {
+        const gr = c.el.getBoundingClientRect();
+        return {
+          selector: cssPath(c.el),
+          tag: c.el.tagName,
+          text: labelOf(c.el).slice(0, 60),
+          source: sourceOf(c.el) || null,
+          sourceLoc: shortLoc(sourceOf(c.el)) || null,
+          rect: { x: Math.round(gr.left), y: Math.round(gr.top), w: Math.round(gr.width), h: Math.round(gr.height) },
+          score: c.score,
+          isPrimary: c.el === el
+        };
+      }),
       instruction: {
         text: S.draft.map(d => d.text).join('；'),
         source: 'voice',
@@ -814,32 +1226,39 @@ details > summary { font-size: 11.5px; color: #7d8794; cursor: pointer; outline:
   }
 
   function applyChanges() {
-    const el = S.target.el;
-    S.snapshot = [{ el: el, cssText: el.style.cssText }];
+    const group = S.selected.length ? S.selected : (S.target ? [S.target] : []);
+    S.snapshot = group.map(function (c) { return { el: c.el, cssText: c.el.style.cssText }; });
 
     let changed = 0;
     const hits = [];
 
-    for (let i = 0; i < S.draft.length; i++) {
-      const text = S.draft[i].text;
-      for (let j = 0; j < ACTIONS.length; j++) {
-        if (ACTIONS[j].re.test(text)) {
-          ACTIONS[j].fn(el);
-          changed++;
-          hits.push(ACTIONS[j].label);
-          break;
+    // 批量：同一条指令作用于圈里的每一个元素
+    for (let g = 0; g < group.length; g++) {
+      const el = group[g].el;
+      for (let i = 0; i < S.draft.length; i++) {
+        const text = S.draft[i].text;
+        for (let j = 0; j < ACTIONS.length; j++) {
+          if (ACTIONS[j].re.test(text)) {
+            ACTIONS[j].fn(el);
+            changed++;
+            if (hits.indexOf(ACTIONS[j].label) === -1) hits.push(ACTIONS[j].label);
+            break;
+          }
         }
       }
     }
 
     if (!changed) {
-      el.style.outline = '2px solid #3b82f6';
-      el.style.outlineOffset = '2px';
-      changed = 1;
+      for (let g = 0; g < group.length; g++) {
+        group[g].el.style.outline = '2px solid #3b82f6';
+        group[g].el.style.outlineOffset = '2px';
+        changed++;
+      }
       hits.push('标记（未识别具体改法）');
     }
 
     S.hits = hits;
+    S.changed = changed;
     return changed;
   }
 
@@ -909,7 +1328,7 @@ details > summary { font-size: 11.5px; color: #7d8794; cursor: pointer; outline:
         '<button class="close" data-act="close">×</button>' +
       '</div>' +
       '<div class="body">' +
-        '<div class="tip">在页面上拖一个圈，然后说出要改什么。<br>也可以直接说，<b>我先把话记下来</b>。' +
+        '<div class="tip">用鼠标绕一圈，<b>不用按任何键</b>，圈住什么就选什么。<br>然后说出要改什么。' +
           '<br><span style="opacity:.55;font-size:11px">' + esc(bridgeLabel()) + '</span></div>' +
         '<div class="wave">' +
           '<i style="animation-delay:0s"></i><i style="animation-delay:.12s"></i><i style="animation-delay:.24s"></i>' +
@@ -921,31 +1340,46 @@ details > summary { font-size: 11.5px; color: #7d8794; cursor: pointer; outline:
   }
 
   function renderDrafting() {
-    const cand = S.target;
-    const el = cand.el;
-    const loc = shortLoc(sourceOf(el));
-    // 与目标互为父子关系的候选不算"备选"——指向它们等于指向同一块内容
-    const others = S.candidates.slice(1)
-      .filter(c => c.el !== el && !c.el.contains(el) && !el.contains(c.el))
-      .map(c => labelOf(c.el).trim())
-      .filter(t => t && t.length >= 2)
-      .slice(0, 2)
-      .map(t => t.slice(0, 8));
+    const group = S.selected.length ? S.selected : (S.target ? [S.target] : []);
+    const main = S.target || group[0];
+    if (!main) return;
+
+    const multi = group.length > 1;
 
     let html = '';
     html += '<div class="head">' +
       '<span class="dot live"></span>' +
       '<span class="status">草稿 · ' + S.draft.length + ' 句</span>' +
-      '<span class="meta">' + esc(cand.score) + ' 分</span>' +
+      '<span class="meta">' + (multi ? '已选 ' + group.length + ' 个' : esc(main.score) + ' 分') + '</span>' +
       '<button class="close" data-act="close">×</button>' +
     '</div>';
 
     html += '<div class="body">';
-    html += '<div class="target">' +
-      '<span class="tag">' + esc(el.tagName) + '</span>' +
-      '<span class="name">' + esc(labelOf(el).slice(0, 18)) + '</span>' +
-      (loc ? '<span class="loc">' + esc(loc) + '</span>' : '<span class="loc none">无 data-ait</span>') +
-    '</div>';
+
+    if (!multi) {
+      const el = main.el;
+      const loc = shortLoc(sourceOf(el));
+      html += '<div class="target">' +
+        '<span class="tag">' + esc(el.tagName) + '</span>' +
+        '<span class="name">' + esc(labelOf(el).slice(0, 18)) + '</span>' +
+        (loc ? '<span class="loc">' + esc(loc) + '</span>' : '<span class="loc none">无 data-ait</span>') +
+      '</div>';
+    } else {
+      // 一圈圈住几个就选几个：序号与页面上的框一致
+      html += '<ol class="picks">';
+      for (let i = 0; i < group.length; i++) {
+        const el = group[i].el;
+        const loc = shortLoc(sourceOf(el));
+        html += '<li' + (el === main.el ? ' class="main"' : '') + '>' +
+          '<span class="n">' + (i + 1) + '</span>' +
+          '<span class="tag">' + esc(el.tagName) + '</span>' +
+          '<span class="t">' + esc(labelOf(el).slice(0, 14) || '（无文本）') + '</span>' +
+          '<span class="loc">' + esc(loc) + '</span>' +
+        '</li>';
+      }
+      html += '</ol>';
+      html += '<div class="picks-note">这一圈选中 ' + group.length + ' 个，会一起改</div>';
+    }
 
     if (S.draft.length) {
       html += '<ol class="draft">';
@@ -957,12 +1391,6 @@ details > summary { font-size: 11.5px; color: #7d8794; cursor: pointer; outline:
       html += '</ol>';
     } else {
       html += '<div class="empty">还没有内容。说出要改什么，回车成句。</div>';
-    }
-
-    if (others.length) {
-      html += '<div class="cands">候选 ' + S.candidates.length + ' 个：<b>' +
-              esc(labelOf(el).slice(0, 10)) + '</b>' +
-              '<span class="sep"> · </span>' + others.map(esc).join('<span class="sep"> · </span>') + '</div>';
     }
 
     html += '</div>';
@@ -987,16 +1415,17 @@ details > summary { font-size: 11.5px; color: #7d8794; cursor: pointer; outline:
   function renderDone() {
     const loc = S.target && S.target.el ? shortLoc(sourceOf(S.target.el)) : '';
     const hits = S.hits || [];
+    const n = S.selected.length;
 
     panel.innerHTML =
       '<div class="head">' +
         '<span class="dot"></span>' +
         '<span class="status">已改好</span>' +
-        '<span class="meta">' + S.changed + ' 处变更</span>' +
+        '<span class="meta">' + (n > 1 ? n + ' 个 · ' : '') + S.changed + ' 处变更</span>' +
       '</div>' +
       '<div class="body">' +
         '<div class="line"><span class="ok">' + esc(hits.join(' · ') || '已应用') + '</span>' +
-          (loc ? '<br><span style="color:#7d8794;font-size:11px">' + esc(loc) + '</span>' : '') +
+          (loc ? '<br><span style="color:#7d8794;font-size:11px">' + esc(loc) + (n > 1 ? ' 等 ' + n + ' 处' : '') + '</span>' : '') +
         '</div>' +
         '<div style="font-size:11px;color:#7d8794;margin-top:4px;line-height:1.5">' +
           (S.channel === 'bridge'
@@ -1066,6 +1495,22 @@ details > summary { font-size: 11.5px; color: #7d8794; cursor: pointer; outline:
     orb.hidden = !idle;
     panel.hidden = idle;
 
+    // 圈选只在聆听/草稿态生效：平时鼠标怎么动都不会被采集
+    if (canDraw()) {
+      showCanvas(true);
+      startWatcher();
+    } else {
+      stopWatcher();
+      S.points = [];
+      S.lockedBox = null;
+      clearCanvas();
+      showCanvas(false);
+      // 选中组要留到"已改好"态用于统计，只有回到待机才清
+      if (idle) S.selected = [];
+    }
+
+    syncState();
+
     if (idle) { clearBoxes(); return; }
     if (S.mode === 'listening') renderListening();
     else if (S.mode === 'drafting') renderDrafting();
@@ -1101,6 +1546,8 @@ details > summary { font-size: 11.5px; color: #7d8794; cursor: pointer; outline:
     if (act === 'close') {
       S.mode = 'idle';
       S.points = [];
+      S.selected = [];
+      S.frozen = null;
       render();
     } else if (act === 'go') {
       submit();
@@ -1114,6 +1561,9 @@ details > summary { font-size: 11.5px; color: #7d8794; cursor: pointer; outline:
       S.draft = [];
       S.target = null;
       S.candidates = [];
+      S.selected = [];
+      S.points = [];
+      S.frozen = null;
       S.snapshot = null;
       S.changed = 0;
       render();
@@ -1124,6 +1574,8 @@ details > summary { font-size: 11.5px; color: #7d8794; cursor: pointer; outline:
     if (e.key === 'Escape' && S.mode !== 'idle') {
       S.mode = 'idle';
       S.points = [];
+      S.selected = [];
+      S.frozen = null;
       render();
     }
   }, true);
